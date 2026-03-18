@@ -48,21 +48,31 @@ exports.tgBot = onRequest(async (req, res) => {
 });
 
 exports.dailyNotification = onSchedule(
-  { schedule: "every 1 minutes", timeZone: "UTC" },
+  { schedule: "every 24 hours", timeZone: "UTC" },
 
   async () => {
     const portfoliosRef = getFirestore().collection("portfolios");
     const snapshot = await portfoliosRef.get();
-    snapshot.forEach((doc) => {
-      console.log(doc.id, "=>", doc.data());
+
+    for (const doc of snapshot.docs) {
+      // console.log(doc.id, "=>", doc.data());
       const portfolio = doc.data();
       if (portfolio.telegramLink) {
-        const chatId = portfolio.telegramLink.userId;
+        const chatId = portfolio.telegramLink.chatId;
+        // console.log({ chatId });
         if (chatId) {
-          bot.sendMessage(chatId, JSON.stringify(portfolio));
+          try {
+            const res = await bot.sendMessage(
+              chatId,
+              JSON.stringify(portfolio.assets),
+            );
+            // console.log({ res });
+          } catch (e) {
+            console.error(e);
+          }
         }
       }
-    });
+    }
   },
 );
 
@@ -91,18 +101,9 @@ bot.onText(/\/start/, async (input) => {
   // console.log({ chatId, username, userId });
 });
 
-// bot.onText(/\/profile/, async (input) => {
-//   const chatId = input.chat.id;
-//   const userId = input.from.id;
-//   const username = input.from.username;
-//   getAllPortfolios()
-// })
-
 bot.on("message", (message) => {
   const chatId = message.chat.id;
   const textMessage = message.text;
   // console.log({ chatId, textMessage, message });
   bot.sendMessage(chatId, "Hello Sir Dear BOSS");
 });
-
-async function getAllPortfolios() {}
