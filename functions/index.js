@@ -42,6 +42,88 @@ const { onSchedule } = require("firebase-functions/scheduler");
 console.log("start");
 const bot = new TelegramBot(process.env.BOT_API_TOKEN);
 
+const COINSTATS_API_KEY = "b31jjX0fM+WeEqGcUTKHKRd3H5RwzYuaHzyhv9EgCM8=";
+const COINSTATS_API_URL = "https://openapiv1.coinstats.app/coins";
+
+async function fetchCurrentPrices() {
+  try {
+    const options = {
+      method: "GET",
+      headers: { "X-API-KEY": COINSTATS_API_KEY },
+    };
+
+    const response = await fetch(COINSTATS_API_URL, options);
+    const data = await response.json();
+    const pricesMap = new Map();
+
+    if (data && data.result) {
+      for (const coin of data.result) {
+        pricesMap.set(coin.id.toLowerCase(), {
+          id: coin.id,
+          symbol: coin.symbol,
+          name: coin.name,
+          price: coin.price,
+          priceChange1d: coin.priceChange1d || 0,
+        });
+      }
+    }
+
+    return pricesMap;
+  } catch (error) {
+    console.error("Error fetching coin prices:", error);
+    return new Map();
+  }
+}
+
+async function sendDailyNotification(chatId, assets) {
+  try {
+    const currentPrices = await fetchCurrentPrices();
+    if (currentPrices.size === 0) {
+      console.error("Failed to fetch current prices");
+      return;
+    }
+
+    let totalMonetaryChange = 0;
+    let totalPreviousValue = 0;
+    let totalCurrentValue = 0;
+
+    for (const asset of assets) {
+      const coinId = asset.id.toLowerCase();
+      const currentPriceData = currentPrices.get(coinId);
+
+      if (currentPriceData) {
+        const previousPrice = asset.price;
+        const currentPrice = currentPriceData.price;
+        const monetaryChange = (currentPrice - previousPrice) * asset.amount;
+        const previousValue = previousPrice * asset.amount;
+        const currentValue = currentPrice * asset.amount;
+
+        totalMonetaryChange += monetaryChange;
+        totalPreviousValue += previousValue;
+        totalCurrentValue += currentValue;
+      }
+    }
+
+    const totalPercentChange =
+      totalPreviousValue > 0
+        ? ((totalCurrentValue - totalPreviousValue) / totalPreviousValue) * 100
+        : 0;
+
+    let message = "";
+    if (totalMonetaryChange > 0) {
+      message = `Your portfolio has grown: ${totalMonetaryChange.toFixed(2)} USD (${totalPercentChange.toFixed(2)}%)`;
+    } else if (totalMonetaryChange < 0) {
+      message = `Your portfolio has fall: ${Math.abs(totalMonetaryChange).toFixed(2)} USD (${Math.abs(totalPercentChange).toFixed(2)}%)`;
+    } else {
+      message = `Your portfolio didn't change: 0.00 USD (0.00%)`;
+    }
+
+    await bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 exports.tgBot = onRequest(async (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
@@ -49,26 +131,23 @@ exports.tgBot = onRequest(async (req, res) => {
 
 exports.dailyNotification = onSchedule(
   { schedule: "every 24 hours", timeZone: "UTC" },
-
   async () => {
     const portfoliosRef = getFirestore().collection("portfolios");
     const snapshot = await portfoliosRef.get();
 
     for (const doc of snapshot.docs) {
-      // console.log(doc.id, "=>", doc.data());
       const portfolio = doc.data();
-      if (portfolio.telegramLink) {
+      if (portfolio.telegramLink && portfolio.assets) {
         const chatId = portfolio.telegramLink.chatId;
-        // console.log({ chatId });
+
         if (chatId) {
           try {
-            const res = await bot.sendMessage(
-              chatId,
-              JSON.stringify(portfolio.assets),
-            );
-            // console.log({ res });
+            await sendDailyNotification(chatId, portfolio.assets);
           } catch (e) {
-            console.error(e);
+            console.error(
+              `Failed to send notification to chatId ${chatId}:`,
+              e,
+            );
           }
         }
       }
@@ -98,12 +177,10 @@ bot.onText(/\/start/, async (input) => {
   bot.sendMessage(chatId, `Your Verification Code is: \`${code}\``, {
     parse_mode: "MarkdownV2",
   });
-  // console.log({ chatId, username, userId });
 });
 
 bot.on("message", (message) => {
   const chatId = message.chat.id;
   const textMessage = message.text;
-  // console.log({ chatId, textMessage, message });
   bot.sendMessage(chatId, "Hello Sir Dear BOSS");
 });
